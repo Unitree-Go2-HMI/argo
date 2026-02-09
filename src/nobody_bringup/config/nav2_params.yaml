@@ -91,7 +91,7 @@ velocity_smoother:
     # TODO: Test CLOSED_LOOP if odometry is reliable
 
     # Maximum velocities (m/s, m/s, rad/s)
-    max_velocity: [2.0, 0.0, 2.0]
+    max_velocity: [1.5, 0.0, 2.0]
     min_velocity: [-0.35, 0.0, -2.0]
 
     # CRITICAL: Hardware deadband for Unitree Go2
@@ -184,7 +184,7 @@ controller_server:
       iteration_count: 1
 
       # Velocity limits for Unitree Go2
-      vx_max: 2.0
+      vx_max: 1.5
       vx_min: -0.35
       vy_max: 0.0
       wz_max: 2.0
@@ -443,7 +443,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0 # 2.0
-        inflation_radius: 0.5 # 0.30
+        inflation_radius: 0.6 # 0.30
 
 # ============================================================================
 # GLOBAL COSTMAP with SPATIO-TEMPORAL VOXEL LAYER
@@ -608,7 +608,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0 # 4.0
-        inflation_radius: 0.5 # 0.25
+        inflation_radius: 0.6 # 0.25
 
 # ============================================================================
 # PLANNER SERVER - Smac Hybrid A* with tightened tolerance

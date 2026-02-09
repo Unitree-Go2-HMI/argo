@@ -12,7 +12,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, PointCloud2, CompressedImage, CameraInfo
-from geometry_msgs.msg import PoseStamped, TransformStamped
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
 from nobody_interfaces.srv import SetTargetClass
 from cv_bridge import CvBridge
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
@@ -35,10 +35,12 @@ class TargetPosEstimationNode(Node):
         self.declare_parameter('annotated_image_topic', '/argo_vision/annotated_image/compressed')
         self.declare_parameter('filtered_pointcloud_topic', '/argo_vision/filtered_pointcloud')
         self.declare_parameter('set_target_class_service', '/argo_vision/set_target_class')
+        self.declare_parameter('cmd_vel_topic', '/cmd_vel')
+        self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('yolo_model', 'yolo11n-seg.pt')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('outlier_std_dev_multiplier', 2.0)
-        self.declare_parameter('default_target_class', 'person')
+        self.declare_parameter('default_target_class', 'gabriele')
         self.declare_parameter('auto_start', True)
         self.declare_parameter('target_frame', 'map')
 
@@ -52,6 +54,8 @@ class TargetPosEstimationNode(Node):
             'annotated_image_topic': self.get_parameter('annotated_image_topic').value,
             'filtered_pointcloud_topic': self.get_parameter('filtered_pointcloud_topic').value,
             'set_target_class_service': self.get_parameter('set_target_class_service').value,
+            'cmd_vel_topic': self.get_parameter('cmd_vel_topic').value,
+            'goal_topic': self.get_parameter('goal_topic').value,
             'yolo_model': self.get_parameter('yolo_model').value,
             'confidence_threshold': self.get_parameter('confidence_threshold').value,
             'outlier_std_dev_multiplier': self.get_parameter('outlier_std_dev_multiplier').value,
@@ -72,7 +76,9 @@ class TargetPosEstimationNode(Node):
         if self.config['auto_start']:
             self.target_class = self.config['default_target_class']
             self.get_logger().info(f"Auto-starting with target class: {self.target_class}")
-
+        
+        self.target_locked = False
+        
         # Latest data
         self.latest_rgb = None
         self.latest_pc = None
@@ -124,6 +130,16 @@ class TargetPosEstimationNode(Node):
         self.filtered_pc_pub = self.create_publisher(
             PointCloud2,
             self.config['filtered_pointcloud_topic'],
+            10
+        )
+        self.cmd_vel_pub = self.create_publisher(
+            Twist,
+            self.config['cmd_vel_topic'],
+            10
+        )
+        self.goal_pub = self.create_publisher(
+            PoseStamped,
+            self.config['goal_topic'],
             10
         )
         # Initialize TF broadcaster and listener
@@ -255,12 +271,14 @@ class TargetPosEstimationNode(Node):
 
         # Process results
         if len(results) == 0:
+            self._handle_target_lost()
             return
 
         result = results[0]
 
         # Check if we have masks (segmentation results)
         if result.masks is None or result.boxes is None:
+            self._handle_target_lost()
             return
 
         # Find the target class in detections
@@ -282,6 +300,7 @@ class TargetPosEstimationNode(Node):
                 f'Target class "{self.target_class}" not found in frame. '
                 f'Detected classes: {list(set(detected_classes))}'
             )
+            self._handle_target_lost()
             return
 
         # Resize mask to match point cloud dimensions if necessary
@@ -320,6 +339,8 @@ class TargetPosEstimationNode(Node):
                 f'y={pose_in_target_frame_stamped.pose.position.y:.3f}, '
                 f'z={pose_in_target_frame_stamped.pose.position.z:.3f}'
             )
+            
+            self.target_locked = True
 
     def _compute_centroid_pose(self, mask, point_cloud):
         """
@@ -500,6 +521,45 @@ class TargetPosEstimationNode(Node):
         compressed_msg.format = "jpeg"
         compressed_msg.data = buffer.tobytes()
         self.annotated_image_pub.publish(compressed_msg)
+
+    def _handle_target_lost(self):
+        """Handle cases where the target is not found."""
+        if self.target_locked:
+            self._send_stop_goal()
+            self.target_locked = False
+        
+        self._publish_rotation()
+
+    def _send_stop_goal(self):
+        """Send a goal to the current robot position to stop navigation."""
+        try:
+            # Get current pose of base_link in target frame (map)
+            transform = self.tf_buffer.lookup_transform(
+                self.config['target_frame'],
+                'base_link',
+                rclpy.time.Time()
+            )
+            
+            goal_msg = PoseStamped()
+            goal_msg.header.stamp = self.get_clock().now().to_msg()
+            goal_msg.header.frame_id = self.config['target_frame']
+            
+            goal_msg.pose.position.x = transform.transform.translation.x
+            goal_msg.pose.position.y = transform.transform.translation.y
+            goal_msg.pose.position.z = transform.transform.translation.z
+            goal_msg.pose.orientation = transform.transform.rotation
+            
+            self.goal_pub.publish(goal_msg)
+            self.get_logger().info('Target lost: Sent stop goal to current position.')
+            
+        except Exception as e:
+            self.get_logger().error(f'Failed to send stop goal: {e}')
+
+    def _publish_rotation(self):
+        """Publish constant angular velocity to rotate in place."""
+        msg = Twist()
+        msg.angular.z = 0.5
+        self.cmd_vel_pub.publish(msg)
 
 
 def main(args=None):
