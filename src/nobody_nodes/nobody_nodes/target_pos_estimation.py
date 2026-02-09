@@ -39,6 +39,7 @@ class TargetPosEstimationNode(Node):
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('costmap_topic', '/local_costmap/costmap_raw')
+        self.declare_parameter('search_timeout', 2.0)
         self.declare_parameter('yolo_model', 'yolo11n-seg.pt')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('outlier_std_dev_multiplier', 2.0)
@@ -59,6 +60,7 @@ class TargetPosEstimationNode(Node):
             'cmd_vel_topic': self.get_parameter('cmd_vel_topic').value,
             'goal_topic': self.get_parameter('goal_topic').value,
             'costmap_topic': self.get_parameter('costmap_topic').value,
+            'search_timeout': self.get_parameter('search_timeout').value,
             'yolo_model': self.get_parameter('yolo_model').value,
             'confidence_threshold': self.get_parameter('confidence_threshold').value,
             'outlier_std_dev_multiplier': self.get_parameter('outlier_std_dev_multiplier').value,
@@ -81,6 +83,7 @@ class TargetPosEstimationNode(Node):
             self.get_logger().info(f"Auto-starting with target class: {self.target_class}")
         
         self.target_locked = False
+        self.target_lost_time = None
         
         # Latest data
         self.latest_rgb = None
@@ -356,6 +359,7 @@ class TargetPosEstimationNode(Node):
             )
             
             self.target_locked = True
+            self.target_lost_time = None
 
     def _compute_centroid_pose(self, mask, point_cloud):
         """
@@ -542,8 +546,14 @@ class TargetPosEstimationNode(Node):
         if self.target_locked:
             self._send_stop_goal()
             self.target_locked = False
-        
-        self._publish_rotation()
+            self.target_lost_time = self.get_clock().now()
+            
+        # Check if enough time has passed to start searching
+        if self.target_lost_time is not None:
+            elapsed_time = (self.get_clock().now() - self.target_lost_time).nanoseconds / 1e9
+            if elapsed_time > self.config['search_timeout']:
+                self._publish_rotation()
+            # Else: wait for timeout, do nothing (robot should be stopped)
 
     def _send_stop_goal(self):
         """Send a goal to the current robot position to stop navigation."""
