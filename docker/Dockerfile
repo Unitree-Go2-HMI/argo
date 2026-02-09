@@ -71,5 +71,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-image-transport-plugins \
     ros-humble-image-transport
 
+RUN cd /ros2_ws/src && \
+    git clone https://github.com/open-navigation/opennav_docking.git --branch humble
+
+RUN apt-get update && \
+    rosdep install --from-paths /ros2_ws/src/opennav_docking --ignore-src -r -y && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN . /opt/ros/${ROS_DISTRO}/setup.sh && \
+    . /ros2_ws/install/setup.sh && \
+    colcon build --symlink-install
+
 # Set default command
 CMD ["bash"]

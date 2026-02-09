@@ -25,7 +25,7 @@ services:
       - ./src/nobody_bringup:/ros2_ws/src/nobody_bringup
       - ./src/nobody_bringup/config/hesai_params.yaml:/ros2_ws/src/HesaiLidar_ROS_2.0/config/config.yaml
       - ./cyclonedds.xml:/ros2_ws/cyclonedds.xml
-      - ./maps:/ros2_ws/maps
+      - ./maps:/out/maps
     network_mode: "host"
     ipc: "host"
     privileged: true

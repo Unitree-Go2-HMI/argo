@@ -69,7 +69,8 @@ bt_navigator:
       - nav2_back_up_cancel_bt_node
       - nav2_assisted_teleop_cancel_bt_node
       - nav2_drive_on_heading_cancel_bt_node
-      # - nobody_bringup_plugins
+      - opennav_follow_action_bt_node
+      - opennav_follow_cancel_bt_node
 
 bt_navigator_navigate_through_poses_rclcpp_node:
   ros__parameters:
@@ -97,7 +98,7 @@ velocity_smoother:
     # CRITICAL: Hardware deadband for Unitree Go2
     # Velocities below these thresholds are set to zero
     # Adjust these based on your empirical testing
-    deadband_velocity: [0.15, 0.0, 0.2]  # [vx, vy, wz]
+    deadband_velocity: [0.15, 0.0, 0.25]  # [vx, vy, wz]
 
     # Acceleration limits (m/s^2, m/s^2, rad/s^2)
     max_accel: [2.5, 0.0, 3.2]
@@ -114,7 +115,7 @@ velocity_smoother:
 # ------------------------------------------------------------------------------
 following_server:
   ros__parameters:
-    controller_frequency: 50.0
+    controller_frequency: 20.0
     detection_timeout: 2.0
     rotate_to_object_timeout: 10.0
     static_object_timeout: -1.0  # follow indefinitely
@@ -131,16 +132,20 @@ following_server:
     odom_duration: 0.3
     transform_tolerance: 1.0
     controller:
+      costmap_topic: "/local_costmap/costmap_raw"
+      footprint_topic: "/local_costmap/published_footprint"
       k_phi: 3.0
       k_delta: 2.0
       beta: 0.4
       lambda: 2.0
-      v_linear_min: 0.1
+      v_linear_min: 0.0
       v_linear_max: 0.5
       v_angular_max: 1.0
       slowdown_radius: 0.15
-      use_collision_detection: false
+      use_collision_detection: true
       transform_tolerance: 1.0
+      # projection_time: 0.5
+      dock_collision_threshold: 0.6
 
 
 # ============================================================================
@@ -181,19 +186,19 @@ controller_server:
       time_steps: 56 # 56
       model_dt: 0.05
       batch_size: 1400 # 1400 # 2000
-      iteration_count: 1
+      iteration_count: 2
 
       # Velocity limits for Unitree Go2
-      vx_max: 2.0
+      vx_max: 1.5
       vx_min: -0.35
       vy_max: 0.0
-      wz_max: 2.0
+      wz_max: 1.5
 
       # Acceleration limits
-      ax_max: 2.5
-      ax_min: -2.5
+      ax_max: 1.0
+      ax_min: -1.0
       ay_max: 0.0
-      az_max: 2.0 # 3.2
+      az_max: 1.0
 
       # MPPI algorithm parameters
       temperature: 0.3
@@ -201,9 +206,9 @@ controller_server:
       motion_model: "DiffDrive"
 
       # Trajectory sampling parameters
-      vx_std: 0.2
+      vx_std: 0.15
       vy_std: 0.0
-      wz_std: 0.4
+      wz_std: 0.5
 
       # Path handling
       prune_distance: 1.5
@@ -250,40 +255,41 @@ controller_server:
       # Goal Angle Critic
       GoalAngleCritic:
         enabled: true
-        cost_weight: 3.0
+        cost_weight: 20.0
         cost_power: 1
         threshold_to_consider: 0.4
 
       # Path Align Critic
       PathAlignCritic:
         enabled: true
-        cost_weight: 5.0 # 10.0
+        cost_weight: 10.0 # 10.0
         cost_power: 1
         max_path_occupancy_ratio: 0.05
         trajectory_point_step: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.2
+        max_angle_to_furthest: 1.2
 
       # Path Follow Critic
       PathFollowCritic:
         enabled: true
-        cost_weight: 5.0
+        cost_weight: 12.0
         cost_power: 1
         offset_from_furthest: 6
-        threshold_to_consider: 1.4
+        threshold_to_consider: 0.5
 
       # Path Angle Critic
       PathAngleCritic:
         enabled: true
-        cost_weight: 2.0
+        cost_weight: 8.0
         cost_power: 1
         offset_from_furthest: 4
-        threshold_to_consider: 0.5
+        threshold_to_consider: 0.2
         max_angle_to_furthest: 1.2
 
       # Prefer Forward Critic
       PreferForwardCritic:
         enabled: true
-        cost_weight: 5.0
+        cost_weight: 25.0
         cost_power: 1
         threshold_to_consider: 0.5
 
@@ -292,7 +298,7 @@ controller_server:
         enabled: true
         cost_weight: 5.0 # 35.0
         cost_power: 1
-        deadband_velocities: [0.05, 0.0, 0.1] # [0.15, 0.0, 0.2]
+        deadband_velocities: [0.05, 0.0, 0.25] # [0.15, 0.0, 0.2]
 
 # ============================================================================
 # LOCAL COSTMAP with SPATIO-TEMPORAL VOXEL LAYER

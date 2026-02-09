@@ -73,6 +73,15 @@ def generate_launch_description():
         }.items(),
     )
 
+    # Following Server launch
+    following_server = Node(
+        package='opennav_following',
+        executable='opennav_following',
+        name='following_server',
+        output='screen',
+        parameters=[nav2_params_file]
+    )
+
     # Base Footprint Publisher
     base_footprint_publisher = Node(
         package='nobody_bringup',
@@ -81,6 +90,14 @@ def generate_launch_description():
         output='screen'
     )
 
+    lifecycle_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_following',
+        output='screen',
+        parameters=[{'autostart': True}, {'use_sim_time': False},
+                    {'node_names': ['following_server']}],
+    )
 
     # Create the LaunchDescription with all components
     return LaunchDescription([
@@ -89,5 +106,7 @@ def generate_launch_description():
         use_sim_time_arg,
         slam_toolbox_launch,
         nav2_launch,
+        following_server,
         base_footprint_publisher,
+        lifecycle_manager,
     ])
