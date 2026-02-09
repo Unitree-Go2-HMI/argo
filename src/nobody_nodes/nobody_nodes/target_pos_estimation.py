@@ -40,6 +40,7 @@ class TargetPosEstimationNode(Node):
         self.declare_parameter('goal_topic', '/goal_pose')
         self.declare_parameter('costmap_topic', '/local_costmap/costmap_raw')
         self.declare_parameter('search_timeout', 2.0)
+        self.declare_parameter('rotation_timeout', 15.0)
         self.declare_parameter('yolo_model', 'yolo11n-seg.pt')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('outlier_std_dev_multiplier', 2.0)
@@ -61,6 +62,7 @@ class TargetPosEstimationNode(Node):
             'goal_topic': self.get_parameter('goal_topic').value,
             'costmap_topic': self.get_parameter('costmap_topic').value,
             'search_timeout': self.get_parameter('search_timeout').value,
+            'rotation_timeout': self.get_parameter('rotation_timeout').value,
             'yolo_model': self.get_parameter('yolo_model').value,
             'confidence_threshold': self.get_parameter('confidence_threshold').value,
             'outlier_std_dev_multiplier': self.get_parameter('outlier_std_dev_multiplier').value,
@@ -84,6 +86,7 @@ class TargetPosEstimationNode(Node):
         
         self.target_locked = False
         self.target_lost_time = None
+        self.search_active = False
         
         # Latest data
         self.latest_rgb = None
@@ -360,6 +363,7 @@ class TargetPosEstimationNode(Node):
             
             self.target_locked = True
             self.target_lost_time = None
+            self.search_active = False
 
     def _compute_centroid_pose(self, mask, point_cloud):
         """
@@ -544,16 +548,33 @@ class TargetPosEstimationNode(Node):
     def _handle_target_lost(self):
         """Handle cases where the target is not found."""
         if self.target_locked:
-            self._send_stop_goal()
+            # Do not stop immediately, just mark logic state
             self.target_locked = False
             self.target_lost_time = self.get_clock().now()
             
         # Check if enough time has passed to start searching
         if self.target_lost_time is not None:
             elapsed_time = (self.get_clock().now() - self.target_lost_time).nanoseconds / 1e9
-            if elapsed_time > self.config['search_timeout']:
-                self._publish_rotation()
-            # Else: wait for timeout, do nothing (robot should be stopped)
+            
+            search_start_time = self.config['search_timeout']
+            rotation_end_time = search_start_time + self.config['rotation_timeout']
+            
+            if elapsed_time > search_start_time:
+                if elapsed_time < rotation_end_time:
+                    # Search Phase: Rotate
+                    if not self.search_active:
+                        self._send_stop_goal()
+                        self.search_active = True
+                    
+                    self._publish_rotation()
+                else:
+                    # Timeout Phase: Stop rotating
+                    # Continuously publish 0 velocity to keep robot stopped
+                    stop_msg = Twist()
+                    self.cmd_vel_pub.publish(stop_msg)
+                    self.get_logger().info('Search timeout expired. Stopping rotation.', throttle_duration_sec=7.0)
+
+            # Else: wait for timeout, do nothing (robot should continue previous action)
 
     def _send_stop_goal(self):
         """Send a goal to the current robot position to stop navigation."""
