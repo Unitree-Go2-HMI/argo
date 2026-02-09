@@ -12,7 +12,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, PointCloud2, CompressedImage, CameraInfo
-from geometry_msgs.msg import PoseStamped, TransformStamped, Twist
+from geometry_msgs.msg import PoseStamped, TransformStamped, Twist, Point
+from nav_msgs.msg import OccupancyGrid
 from nobody_interfaces.srv import SetTargetClass
 from cv_bridge import CvBridge
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener
@@ -37,6 +38,7 @@ class TargetPosEstimationNode(Node):
         self.declare_parameter('set_target_class_service', '/argo_vision/set_target_class')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('goal_topic', '/goal_pose')
+        self.declare_parameter('costmap_topic', '/local_costmap/costmap_raw')
         self.declare_parameter('yolo_model', 'yolo11n-seg.pt')
         self.declare_parameter('confidence_threshold', 0.5)
         self.declare_parameter('outlier_std_dev_multiplier', 2.0)
@@ -56,6 +58,7 @@ class TargetPosEstimationNode(Node):
             'set_target_class_service': self.get_parameter('set_target_class_service').value,
             'cmd_vel_topic': self.get_parameter('cmd_vel_topic').value,
             'goal_topic': self.get_parameter('goal_topic').value,
+            'costmap_topic': self.get_parameter('costmap_topic').value,
             'yolo_model': self.get_parameter('yolo_model').value,
             'confidence_threshold': self.get_parameter('confidence_threshold').value,
             'outlier_std_dev_multiplier': self.get_parameter('outlier_std_dev_multiplier').value,
@@ -82,6 +85,7 @@ class TargetPosEstimationNode(Node):
         # Latest data
         self.latest_rgb = None
         self.latest_pc = None
+        self.latest_costmap = None
         self.latest_rgb_header = None
         self.camera_info = None
         self.camera_matrix = None
@@ -142,6 +146,14 @@ class TargetPosEstimationNode(Node):
             self.config['goal_topic'],
             10
         )
+        
+        self.costmap_sub = self.create_subscription(
+            OccupancyGrid,
+            self.config['costmap_topic'],
+            self._costmap_callback,
+            sensor_qos
+        )
+
         # Initialize TF broadcaster and listener
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
@@ -214,6 +226,9 @@ class TargetPosEstimationNode(Node):
             # Unsubscribe after receiving camera info once
             self.destroy_subscription(self.camera_info_sub)
 
+    def _costmap_callback(self, msg):
+        """Callback for OccupancyGrid messages."""
+        self.latest_costmap = msg
 
     def _set_target_class_callback(self, request, response):
         """Service callback to set the target class for detection."""
@@ -557,9 +572,76 @@ class TargetPosEstimationNode(Node):
 
     def _publish_rotation(self):
         """Publish constant angular velocity to rotate in place."""
+        if not self._check_collision():
+            self.get_logger().warn('Rotation blocked by obstacle or missing costmap.', throttle_duration_sec=2.0)
+            # Stop the robot
+            msg = Twist()
+            self.cmd_vel_pub.publish(msg)
+            return
+
         msg = Twist()
         msg.angular.z = 0.5
         self.cmd_vel_pub.publish(msg)
+
+    def _check_collision(self):
+        """
+        Check for obstacles around the robot using the local costmap.
+        Returns True if safe, False if obstacle detected.
+        """
+        if self.latest_costmap is None:
+            self.get_logger().warn('No costmap received yet.', throttle_duration_sec=5.0)
+            return False
+
+        costmap = self.latest_costmap
+        width = costmap.info.width
+        height = costmap.info.height
+        resolution = costmap.info.resolution
+        origin_x = costmap.info.origin.position.x
+        origin_y = costmap.info.origin.position.y
+
+        # Define safety radius in meters
+        safety_radius = 0.4
+        safety_radius_cells = int(safety_radius / resolution)
+
+        # Get robot position in costmap frame (usually it's centered or we need TF)
+        # The local costmap usually has base_link as origin or it's rolling.
+        # If rolling window is true, the robot is typically at the center.
+        # But to be robust, we should transform base_link (0,0) to costmap frame.
+        
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                costmap.header.frame_id,
+                'base_link',
+                rclpy.time.Time()
+            )
+            robot_x = transform.transform.translation.x
+            robot_y = transform.transform.translation.y
+        except Exception as e:
+            self.get_logger().warn(f'TF lookup failed for collision check: {e}', throttle_duration_sec=2.0)
+            return False
+
+        # Convert robot world coordinates to grid coordinates
+        grid_x = int((robot_x - origin_x) / resolution)
+        grid_y = int((robot_y - origin_y) / resolution)
+
+        # Check cells around the robot
+        start_x = max(0, grid_x - safety_radius_cells)
+        end_x = min(width, grid_x + safety_radius_cells)
+        start_y = max(0, grid_y - safety_radius_cells)
+        end_y = min(height, grid_y + safety_radius_cells)
+
+        for y in range(start_y, end_y):
+            for x in range(start_x, end_x):
+                # Calculate distance to robot center to check circular area
+                dx = (x - grid_x) * resolution
+                dy = (y - grid_y) * resolution
+                if (dx*dx + dy*dy) <= (safety_radius * safety_radius):
+                    idx = y * width + x
+                    # Cost value > 50 considered obstacle (LETHAL_OBSTACLE is 100)
+                    if costmap.data[idx] > 50:
+                        return False
+        
+        return True
 
 
 def main(args=None):
